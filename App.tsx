@@ -421,11 +421,20 @@ function verdict(subjectName:string, twin:Player, score:number, closest:any[]){
   return `${subjectName} and ${twin.name} live in the same statistical neighborhood — especially in ${names}. Same shape, different era.`;
 }
 type SavedTwin = { id: string; value: { subjectName: string; subjectPos: string; twinName: string; score: number; preset: string; subject: Metrics; isCustom: boolean } };
-async function callRecords(action: string, args: Record<string, unknown>) {
-  const response = await fetch("actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, args }) });
-  const json = await response.json();
-  if (!response.ok || json.error) throw new Error(typeof json.error === "string" ? json.error : "Could not reach the saved-twins service.");
-  return json.data;
+const SAVED_TWINS_STORAGE_KEY = 'nba-twin-finder:saved-twins';
+function isSavedTwin(record: unknown): record is SavedTwin {
+  return typeof record === 'object' && record !== null &&
+    'id' in record && typeof record.id === 'string' &&
+    'value' in record && typeof record.value === 'object' && record.value !== null;
+}
+function readSavedTwins(): SavedTwin[] {
+  const stored = window.localStorage.getItem(SAVED_TWINS_STORAGE_KEY);
+  if (stored === null) return [];
+  const records: unknown = JSON.parse(stored);
+  if (!Array.isArray(records) || !records.every(isSavedTwin)) {
+    throw new Error('Saved twins data is invalid.');
+  }
+  return records;
 }
 export default function App(){
   const [tab,setTab]=useState<'pick'|'build'>('pick');
@@ -451,14 +460,17 @@ export default function App(){
   const [saveResult,setSaveResult]=useState<{saved:number;remaining:number;error:string|null;reloadError:string|null}|null>(null);
   const [debouncedQuery,setDebouncedQuery]=useState('');
   useEffect(()=>{ const t=setTimeout(()=>setDebouncedQuery(query), 140); return ()=>clearTimeout(t); },[query]);
-  async function reloadRecords(){
-    const data = await callRecords("records.list", { collection: "twin_saves" });
-    setSavedTwins(Array.isArray(data?.records) ? data.records : []);
+  function reloadRecords(){
+    setSavedTwins(readSavedTwins());
   }
-  async function createRow(row: SavedTwin["value"]){
-    await callRecords("records.create", { collection: "twin_saves", value: row, idempotency_key: `twin-${row.subjectName}-${row.twinName}-${Math.round(row.score)}-${row.preset}` });
+  function createRow(row: SavedTwin["value"]){
+    const records = readSavedTwins();
+    const id = `twin-${row.subjectName}-${row.twinName}-${Math.round(row.score)}-${row.preset}`;
+    if (records.some(record => record.id === id)) return;
+    records.unshift({ id, value: row });
+    window.localStorage.setItem(SAVED_TWINS_STORAGE_KEY, JSON.stringify(records));
   }
-  useEffect(()=>{ (async()=>{ try { await reloadRecords(); } catch(e){ setSavedError(e instanceof Error ? e.message : String(e)); } })(); },[]);
+  useEffect(()=>{ try { reloadRecords(); } catch(e){ setSavedError(e instanceof Error ? e.message : String(e)); } },[]);
   const PAGE_SIZE=40;
   const activePlayers = PLAYERS;
   const activeStats = useMemo(()=> getStats(activePlayers), [activePlayers]);
